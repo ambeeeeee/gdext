@@ -368,7 +368,7 @@ pub(crate) fn maybe_rename_parameter(param_ident: Ident, next_unnamed_index: &mu
         // This could technically collide with another parameter of the same name (without "_"), but that's very unlikely and not
         // something we really need to support.
         // Note that the case of a single "_" is handled above.
-        ident(remain)
+        format_ident!("r#{}", remain)
     } else {
         param_ident
     }
