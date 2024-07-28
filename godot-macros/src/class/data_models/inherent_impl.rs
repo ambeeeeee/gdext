@@ -9,12 +9,15 @@ use crate::class::{
     into_signature_info, make_constant_registration, make_method_registration,
     make_signal_registrations, ConstDefinition, FuncDefinition, SignalDefinition, SignatureInfo,
 };
-use crate::util::{bail, require_api_version, KvParser};
+use crate::util::{bail, ident, require_api_version, KvParser};
 use crate::{util, ParseResult};
 
 use proc_macro2::{Delimiter, Group, Ident, TokenStream};
 use quote::spanned::Spanned;
 use quote::{format_ident, quote};
+use venial::{Attribute, Function};
+
+use super::func::{make_rpc_registration, RpcFuncDefinition};
 
 /// Attribute for user-declared function.
 enum ItemAttrType {
@@ -22,6 +25,15 @@ enum ItemAttrType {
         rename: Option<String>,
         is_virtual: bool,
         has_gd_self: bool,
+    },
+    Rpc {
+        rename: Option<String>,
+        is_virtual: bool,
+        has_gd_self: bool,
+        mode: Option<TokenStream>,
+        sync: Option<TokenStream>,
+        transfer_mode: Option<TokenStream>,
+        transfer_channel: Option<TokenStream>,
     },
     Signal(venial::AttributeValue),
     Const(#[allow(dead_code)] venial::AttributeValue),
@@ -48,7 +60,7 @@ pub fn transform_inherent_impl(mut impl_block: venial::Impl) -> ParseResult<Toke
     let prv = quote! { ::godot::private };
 
     // Can add extra functions to the end of the impl block.
-    let (funcs, signals) = process_godot_fns(&class_name, &mut impl_block)?;
+    let (funcs, signals, rpc) = process_godot_fns(&class_name, &mut impl_block)?;
     let consts = process_godot_constants(&mut impl_block)?;
 
     #[cfg(all(feature = "docs", since_api = "4.3"))]
@@ -65,6 +77,11 @@ pub fn transform_inherent_impl(mut impl_block: venial::Impl) -> ParseResult<Toke
 
     let constant_registration = make_constant_registration(consts, &class_name, &class_name_obj)?;
 
+    let rpc_registration: Vec<TokenStream> = rpc
+        .into_iter()
+        .map(|rpc| make_rpc_registration(&class_name, rpc))
+        .collect::<ParseResult<Vec<TokenStream>>>()?; // <- FIXME transpose this
+
     let result = quote! {
         #impl_block
 
@@ -76,6 +93,10 @@ pub fn transform_inherent_impl(mut impl_block: venial::Impl) -> ParseResult<Toke
 
             fn __register_constants() {
                 #constant_registration
+            }
+
+            fn __register_rpc(base: &mut ::godot::obj::Gd<::godot::classes::Node>) {
+                #( #rpc_registration )*
             }
         }
 
@@ -97,10 +118,15 @@ pub fn transform_inherent_impl(mut impl_block: venial::Impl) -> ParseResult<Toke
 fn process_godot_fns(
     class_name: &Ident,
     impl_block: &mut venial::Impl,
-) -> ParseResult<(Vec<FuncDefinition>, Vec<SignalDefinition>)> {
+) -> ParseResult<(
+    Vec<FuncDefinition>,
+    Vec<SignalDefinition>,
+    Vec<RpcFuncDefinition>,
+)> {
     let mut func_definitions = vec![];
     let mut signal_definitions = vec![];
     let mut virtual_functions = vec![];
+    let mut rpc_functions = vec![];
 
     let mut removed_indexes = vec![];
     for (index, item) in impl_block.body_items.iter_mut().enumerate() {
@@ -134,11 +160,61 @@ fn process_godot_fns(
                 rename,
                 is_virtual,
                 has_gd_self,
+            } => func_definitions.push(impl_func(
+                function,
+                &mut virtual_functions,
+                attr.attr_name,
+                class_name,
+                rename,
+                is_virtual,
+                has_gd_self,
+            )?),
+            ItemAttrType::Signal(ref _attr_val) => {
+                if function.return_ty.is_some() {
+                    return attr.bail("return types are not supported", function);
+                }
+
+                let external_attributes = function.attributes.clone();
+                let sig = util::reduce_to_signature(function);
+
+                signal_definitions.push(SignalDefinition {
+                    signature: sig,
+                    external_attributes,
+                });
+
+                removed_indexes.push(index);
+            }
+            ItemAttrType::Const(_) => {
+                return attr.bail(
+                    "#[constant] can only be used on associated constant",
+                    function,
+                )
+            }
+            ItemAttrType::Rpc {
+                rename,
+                is_virtual,
+                has_gd_self,
+                mode,
+                sync,
+                transfer_mode,
+                transfer_channel,
             } => {
+                // #[rpc] implies #[func]
+                func_definitions.push(impl_func(
+                    function,
+                    &mut virtual_functions,
+                    attr.attr_name.clone(),
+                    class_name,
+                    rename.clone(),
+                    is_virtual,
+                    has_gd_self,
+                )?);
+
                 let external_attributes = function.attributes.clone();
 
                 // Signatures are the same thing without body.
                 let mut signature = util::reduce_to_signature(function);
+
                 let gd_self_parameter = if has_gd_self {
                     if signature.params.is_empty() {
                         return bail_attr(
@@ -168,46 +244,13 @@ fn process_godot_fns(
                 let signature_info =
                     into_signature_info(signature.clone(), class_name, gd_self_parameter.is_some());
 
-                // For virtual methods, rename/mangle existing user method and create a new method with the original name,
-                // which performs a dynamic dispatch.
-                if is_virtual {
-                    add_virtual_script_call(
-                        &mut virtual_functions,
-                        function,
-                        &signature_info,
-                        class_name,
-                        &rename,
-                        gd_self_parameter,
-                    );
-                };
-
-                func_definitions.push(FuncDefinition {
-                    signature_info,
-                    external_attributes,
-                    rename,
-                    is_script_virtual: is_virtual,
-                });
-            }
-            ItemAttrType::Signal(ref _attr_val) => {
-                if function.return_ty.is_some() {
-                    return attr.bail("return types are not supported", function);
-                }
-
-                let external_attributes = function.attributes.clone();
-                let sig = util::reduce_to_signature(function);
-
-                signal_definitions.push(SignalDefinition {
-                    signature: sig,
-                    external_attributes,
-                });
-
-                removed_indexes.push(index);
-            }
-            ItemAttrType::Const(_) => {
-                return attr.bail(
-                    "#[constant] can only be used on associated constant",
-                    function,
-                )
+                rpc_functions.push(RpcFuncDefinition {
+                    method_name: rename.unwrap_or_else(|| attr.attr_name.to_string()),
+                    mode,
+                    sync,
+                    transfer_mode,
+                    transfer_channel,
+                })
             }
         }
     }
@@ -224,7 +267,70 @@ fn process_godot_fns(
         impl_block.body_items.push(member);
     }
 
-    Ok((func_definitions, signal_definitions))
+    Ok((func_definitions, signal_definitions, rpc_functions))
+}
+
+fn impl_func(
+    function: &mut Function,
+    virtual_functions: &mut Vec<venial::Function>,
+    attr_name: Ident,
+    class_name: &Ident,
+    rename: Option<String>,
+    is_virtual: bool,
+    has_gd_self: bool,
+) -> ParseResult<FuncDefinition> {
+    let external_attributes = function.attributes.clone();
+
+    // Signatures are the same thing without body.
+    let mut signature = util::reduce_to_signature(function);
+    let gd_self_parameter = if has_gd_self {
+        if signature.params.is_empty() {
+            return bail_attr(
+                attr_name,
+                "with attribute key `gd_self`, the method must have a first parameter of type Gd<Self>",
+                function
+            );
+        } else {
+            let param = signature.params.inner.remove(0);
+
+            let venial::FnParam::Typed(param) = param.0 else {
+                return bail_attr(
+                    attr_name,
+                    "with attribute key `gd_self`, the first parameter must be Gd<Self> (not a `self` receiver)",
+                    function
+                );
+            };
+
+            // Note: parameter is explicitly NOT renamed (maybe_rename_parameter).
+            Some(param.name)
+        }
+    } else {
+        None
+    };
+
+    // Clone might not strictly be necessary, but the 2 other callers of into_signature_info() are better off with pass-by-value.
+    let signature_info =
+        into_signature_info(signature.clone(), class_name, gd_self_parameter.is_some());
+
+    // For virtual methods, rename/mangle existing user method and create a new method with the original name,
+    // which performs a dynamic dispatch.
+    if is_virtual {
+        add_virtual_script_call(
+            virtual_functions,
+            function,
+            &signature_info,
+            class_name,
+            &rename,
+            gd_self_parameter,
+        );
+    };
+
+    Ok(FuncDefinition {
+        signature_info,
+        external_attributes,
+        rename,
+        is_script_virtual: is_virtual,
+    })
 }
 
 fn process_godot_constants(decl: &mut venial::Impl) -> ParseResult<Vec<ConstDefinition>> {
@@ -245,6 +351,9 @@ fn process_godot_constants(decl: &mut venial::Impl) -> ParseResult<Vec<ConstDefi
                 }
                 ItemAttrType::Signal(_) => {
                     return bail!(constant, "#[signal] can only be used on functions")
+                }
+                ItemAttrType::Rpc { .. } => {
+                    return bail!(constant, "#[rpc] can only be used on functions")
                 }
                 ItemAttrType::Const(_) => {
                     if constant.initializer.is_none() {
@@ -403,6 +512,54 @@ where
                 index,
                 ty: ItemAttrType::Const(attr.value.clone()),
             },
+
+            // #[rpc]
+            name if name == "rpc" => {
+                // Safe unwrap since #[rpc] must be present if we got to this point
+                let mut parser = KvParser::parse(attributes, "rpc")?.unwrap();
+
+                // #[rpc(rename = MyClass)]
+                let rename = parser.handle_expr("rename")?.map(|ts| ts.to_string());
+
+                // #[rpc(virtual)]
+                let is_virtual = if let Some(span) = parser.handle_alone_with_span("virtual")? {
+                    require_api_version!("4.3", span, "#[rpc(virtual)]")?;
+                    true
+                } else {
+                    false
+                };
+
+                // #[rpc(gd_self)]
+                let has_gd_self = parser.handle_alone("gd_self")?;
+
+                // #[rpc(mode = TODOTYPE::Authority)]
+                let mode = parser.handle_expr("mode")?;
+
+                // #[rpc(sync = TODOTYPE::CallRemote)]
+                let sync = parser.handle_expr("sync")?;
+
+                // #[rpc(transfer_mode = TODOTYPE::Unreliable)]
+                let transfer_mode = parser.handle_expr("transfer_mode")?;
+
+                // #[rpc(transfer_channel = 727)]
+                let transfer_channel = parser.handle_expr("transfer_channel")?;
+
+                parser.finish()?;
+
+                ItemAttr {
+                    attr_name: attr_name.clone(),
+                    index,
+                    ty: ItemAttrType::Rpc {
+                        mode,
+                        sync,
+                        transfer_mode,
+                        transfer_channel,
+                        rename,
+                        is_virtual,
+                        has_gd_self,
+                    },
+                }
+            }
 
             // Ignore unknown attributes.
             _ => continue,

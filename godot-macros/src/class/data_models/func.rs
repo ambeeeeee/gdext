@@ -21,6 +21,14 @@ pub struct FuncDefinition {
     pub is_script_virtual: bool,
 }
 
+pub struct RpcFuncDefinition {
+    pub method_name: String,
+    pub mode: Option<TokenStream>,
+    pub sync: Option<TokenStream>,
+    pub transfer_mode: Option<TokenStream>,
+    pub transfer_channel: Option<TokenStream>,
+}
+
 /// Returns a C function which acts as the callback when a virtual method of this instance is invoked.
 //
 // Virtual methods are non-static by their nature; so there's no support for static ones.
@@ -144,6 +152,61 @@ pub fn make_method_registration(
             // Note: information whether the method is virtual is stored in method method_info's flags.
             method_info.register_extension_class_method();
         };
+    };
+
+    Ok(registration)
+}
+
+pub fn make_rpc_registration(
+    class_name: &Ident,
+    rpc_func_definition: RpcFuncDefinition,
+) -> ParseResult<TokenStream> {
+    let rpc_method_name = rpc_func_definition.method_name;
+
+    let mode = if let Some(mode) = rpc_func_definition.mode {
+        quote! {
+            ("mode".to_variant(), #mode.to_variant()),
+        }
+    } else {
+        quote! {}
+    };
+
+    let transfer_mode = if let Some(transfer_mode) = rpc_func_definition.transfer_mode {
+        quote! {
+            ("transfer_mode".to_variant(), #transfer_mode.to_variant()),
+        }
+    } else {
+        quote! {}
+    };
+
+    let call_local = if let Some(sync) = rpc_func_definition.sync {
+        // The way the dictionary accepts this value is with `true` indicating the RPC
+        // endpoint will be called on the local and remote host.
+
+        todo!()
+    } else {
+        quote! {}
+    };
+
+    let channel = if let Some(channel) = rpc_func_definition.transfer_channel {
+        quote! {
+            ("channel".to_variant(), #channel.to_variant()),
+        }
+    } else {
+        quote! {}
+    };
+
+    let registration = quote! {
+        use ::godot::classes::Node;
+
+        let rpc_configuration = Dictionary::from_iter([
+            #mode
+            #transfer_mode
+            #call_local
+            #channel
+        ]);
+
+        base.rpc_config(#rpc_method_name.into(), rpc_configuration.to_variant());
     };
 
     Ok(registration)

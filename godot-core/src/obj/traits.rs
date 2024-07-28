@@ -443,6 +443,7 @@ where
 pub mod cap {
     use super::*;
     use crate::builtin::{StringName, Variant};
+    use crate::classes::Node;
     use crate::obj::{Base, Bounds, Gd};
 
     /// Trait for all classes that are default-constructible from the Godot engine.
@@ -547,6 +548,8 @@ pub mod cap {
         fn __register_methods();
         #[doc(hidden)]
         fn __register_constants();
+        #[doc(hidden)]
+        fn __register_rpc(base: &mut Gd<Node>);
     }
 
     pub trait ImplementsGodotExports: GodotClass {
