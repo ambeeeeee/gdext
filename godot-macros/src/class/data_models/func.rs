@@ -8,7 +8,7 @@
 use crate::util::{bail_fn, ident, safe_ident};
 use crate::{util, ParseResult};
 use proc_macro2::{Group, Ident, TokenStream, TokenTree};
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 
 /// Information used for registering a Rust function with Godot.
 pub struct FuncDefinition {
@@ -163,48 +163,39 @@ pub fn make_rpc_registration(
 ) -> ParseResult<TokenStream> {
     let rpc_method_name = rpc_func_definition.method_name;
 
-    let mode = if let Some(mode) = rpc_func_definition.mode {
+    let mode = rpc_func_definition.mode.map(|mode| {
         quote! {
-            ("mode".to_variant(), #mode.to_variant()),
+            "mode": #mode,
         }
-    } else {
-        quote! {}
-    };
+    });
 
-    let transfer_mode = if let Some(transfer_mode) = rpc_func_definition.transfer_mode {
+    let transfer_mode = rpc_func_definition.transfer_mode.map(|transfer_mode| {
         quote! {
-            ("transfer_mode".to_variant(), #transfer_mode.to_variant()),
+            "transfer_mode": #transfer_mode,
         }
-    } else {
-        quote! {}
-    };
+    });
 
-    let call_local = if let Some(sync) = rpc_func_definition.sync {
-        // The way the dictionary accepts this value is with `true` indicating the RPC
-        // endpoint will be called on the local and remote host.
+    // let call_local = rpc_func_definition.mode.map(|call_local| {
+    //     quote! {
+    //         "call_local": false,
+    //     }
+    // });
 
-        todo!()
-    } else {
-        quote! {}
-    };
-
-    let channel = if let Some(channel) = rpc_func_definition.transfer_channel {
+    let channel = rpc_func_definition.transfer_channel.map(|channel| {
         quote! {
-            ("channel".to_variant(), #channel.to_variant()),
+            "channel": #channel,
         }
-    } else {
-        quote! {}
-    };
+    });
 
     let registration = quote! {
         use ::godot::classes::Node;
 
-        let rpc_configuration = Dictionary::from_iter([
+        let rpc_configuration = dict! {
             #mode
             #transfer_mode
-            #call_local
+            // #call_local
             #channel
-        ]);
+        };
 
         base.rpc_config(#rpc_method_name.into(), rpc_configuration.to_variant());
     };
