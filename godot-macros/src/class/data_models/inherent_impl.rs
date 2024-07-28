@@ -245,7 +245,7 @@ fn process_godot_fns(
                     into_signature_info(signature.clone(), class_name, gd_self_parameter.is_some());
 
                 rpc_functions.push(RpcFuncDefinition {
-                    method_name: rename.unwrap_or_else(|| attr.attr_name.to_string()),
+                    method_name: rename.unwrap_or_else(|| signature.name.to_string()),
                     mode,
                     sync,
                     transfer_mode,
