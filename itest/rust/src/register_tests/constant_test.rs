@@ -134,7 +134,7 @@ impl HasOtherConstants {
 // proc-macro.
 impl godot::obj::cap::ImplementsGodotApi for HasOtherConstants {
     fn __register_methods() {}
-    fn __register_rpc(base: &mut Gd<Node>) {}
+    fn __register_rpc(_: &mut Gd<Node>) {}
     fn __register_constants() {
         use ::godot::register::private::constant::*;
         // Try exporting an enum.

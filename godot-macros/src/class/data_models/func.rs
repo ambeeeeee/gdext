@@ -8,7 +8,7 @@
 use crate::util::{bail_fn, ident, safe_ident};
 use crate::{util, ParseResult};
 use proc_macro2::{Group, Ident, TokenStream, TokenTree};
-use quote::{format_ident, quote, quote_spanned};
+use quote::{format_ident, quote};
 
 /// Information used for registering a Rust function with Godot.
 pub struct FuncDefinition {
@@ -19,14 +19,6 @@ pub struct FuncDefinition {
     /// The name the function will be exposed as in Godot. If `None`, the Rust function name is used.
     pub rename: Option<String>,
     pub is_script_virtual: bool,
-}
-
-pub struct RpcFuncDefinition {
-    pub method_name: String,
-    pub mode: Option<TokenStream>,
-    pub sync: Option<TokenStream>,
-    pub transfer_mode: Option<TokenStream>,
-    pub transfer_channel: Option<TokenStream>,
 }
 
 /// Returns a C function which acts as the callback when a virtual method of this instance is invoked.
@@ -152,52 +144,6 @@ pub fn make_method_registration(
             // Note: information whether the method is virtual is stored in method method_info's flags.
             method_info.register_extension_class_method();
         };
-    };
-
-    Ok(registration)
-}
-
-pub fn make_rpc_registration(
-    class_name: &Ident,
-    rpc_func_definition: RpcFuncDefinition,
-) -> ParseResult<TokenStream> {
-    let rpc_method_name = rpc_func_definition.method_name;
-
-    let mode = rpc_func_definition.mode.map(|mode| {
-        quote! {
-            "mode": #mode,
-        }
-    });
-
-    let transfer_mode = rpc_func_definition.transfer_mode.map(|transfer_mode| {
-        quote! {
-            "transfer_mode": #transfer_mode,
-        }
-    });
-
-    // let call_local = rpc_func_definition.mode.map(|call_local| {
-    //     quote! {
-    //         "call_local": false,
-    //     }
-    // });
-
-    let channel = rpc_func_definition.transfer_channel.map(|channel| {
-        quote! {
-            "channel": #channel,
-        }
-    });
-
-    let registration = quote! {
-        use ::godot::classes::Node;
-
-        let rpc_configuration = dict! {
-            #mode
-            #transfer_mode
-            // #call_local
-            #channel
-        };
-
-        base.rpc_config(#rpc_method_name.into(), rpc_configuration.to_variant());
     };
 
     Ok(registration)

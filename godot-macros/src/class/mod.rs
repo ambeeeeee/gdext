@@ -16,6 +16,7 @@ mod data_models {
     pub mod inherent_impl;
     pub mod interface_trait_impl;
     pub mod property;
+    pub mod rpc;
     pub mod signal;
 }
 
@@ -27,6 +28,7 @@ pub(crate) use data_models::func::*;
 pub(crate) use data_models::inherent_impl::*;
 pub(crate) use data_models::interface_trait_impl::*;
 pub(crate) use data_models::property::*;
+pub(crate) use data_models::rpc::*;
 pub(crate) use data_models::signal::*;
 pub(crate) use derive_godot_class::*;
 pub(crate) use godot_api::*;

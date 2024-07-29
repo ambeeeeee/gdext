@@ -18,6 +18,7 @@ mod instance_id;
 mod object_arg;
 mod onready;
 mod raw_gd;
+mod rpc;
 mod traits;
 
 pub(crate) mod rtti;
@@ -29,6 +30,7 @@ pub use instance_id::*;
 pub use object_arg::*;
 pub use onready::*;
 pub use raw_gd::*;
+pub use rpc::*;
 pub use traits::*;
 
 pub mod bounds;

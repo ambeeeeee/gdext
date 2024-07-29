@@ -7,17 +7,16 @@
 
 use crate::class::{
     into_signature_info, make_constant_registration, make_method_registration,
-    make_signal_registrations, ConstDefinition, FuncDefinition, SignalDefinition, SignatureInfo,
+    make_rpc_registration, make_signal_registrations, ConstDefinition, FuncDefinition,
+    RpcFuncDefinition, SignalDefinition, SignatureInfo,
 };
-use crate::util::{bail, ident, require_api_version, KvParser};
+use crate::util::{bail, require_api_version, KvParser};
 use crate::{util, ParseResult};
 
 use proc_macro2::{Delimiter, Group, Ident, TokenStream};
 use quote::spanned::Spanned;
 use quote::{format_ident, quote};
-use venial::{Attribute, Function};
-
-use super::func::{make_rpc_registration, RpcFuncDefinition};
+use venial::Function;
 
 /// Attribute for user-declared function.
 enum ItemAttrType {
@@ -31,7 +30,7 @@ enum ItemAttrType {
         is_virtual: bool,
         has_gd_self: bool,
         mode: Option<TokenStream>,
-        sync: Option<TokenStream>,
+        call_local: Option<TokenStream>,
         transfer_mode: Option<TokenStream>,
         transfer_channel: Option<TokenStream>,
     },
@@ -79,7 +78,7 @@ pub fn transform_inherent_impl(mut impl_block: venial::Impl) -> ParseResult<Toke
 
     let rpc_registration: Vec<TokenStream> = rpc
         .into_iter()
-        .map(|rpc| make_rpc_registration(&class_name, rpc))
+        .map(|rpc| make_rpc_registration(rpc))
         .collect::<ParseResult<Vec<TokenStream>>>()?; // <- FIXME transpose this
 
     let result = quote! {
@@ -195,7 +194,7 @@ fn process_godot_fns(
                 is_virtual,
                 has_gd_self,
                 mode,
-                sync,
+                call_local,
                 transfer_mode,
                 transfer_channel,
             } => {
@@ -210,44 +209,13 @@ fn process_godot_fns(
                     has_gd_self,
                 )?);
 
-                let external_attributes = function.attributes.clone();
-
                 // Signatures are the same thing without body.
-                let mut signature = util::reduce_to_signature(function);
-
-                let gd_self_parameter = if has_gd_self {
-                    if signature.params.is_empty() {
-                        return bail_attr(
-                            attr.attr_name,
-                            "with attribute key `gd_self`, the method must have a first parameter of type Gd<Self>",
-                            function
-                        );
-                    } else {
-                        let param = signature.params.inner.remove(0);
-
-                        let venial::FnParam::Typed(param) = param.0 else {
-                            return bail_attr(
-                                attr.attr_name,
-                                "with attribute key `gd_self`, the first parameter must be Gd<Self> (not a `self` receiver)",
-                                function
-                            );
-                        };
-
-                        // Note: parameter is explicitly NOT renamed (maybe_rename_parameter).
-                        Some(param.name)
-                    }
-                } else {
-                    None
-                };
-
-                // Clone might not strictly be necessary, but the 2 other callers of into_signature_info() are better off with pass-by-value.
-                let signature_info =
-                    into_signature_info(signature.clone(), class_name, gd_self_parameter.is_some());
+                let signature = util::reduce_to_signature(function);
 
                 rpc_functions.push(RpcFuncDefinition {
                     method_name: rename.unwrap_or_else(|| signature.name.to_string()),
                     mode,
-                    sync,
+                    call_local,
                     transfer_mode,
                     transfer_channel,
                 })
@@ -535,8 +503,8 @@ where
                 // #[rpc(mode = TODOTYPE::Authority)]
                 let mode = parser.handle_expr("mode")?;
 
-                // #[rpc(sync = TODOTYPE::CallRemote)]
-                let sync = parser.handle_expr("sync")?;
+                // #[rpc(call_local = true)]
+                let call_local = parser.handle_expr("call_local")?;
 
                 // #[rpc(transfer_mode = TODOTYPE::Unreliable)]
                 let transfer_mode = parser.handle_expr("transfer_mode")?;
@@ -551,7 +519,7 @@ where
                     index,
                     ty: ItemAttrType::Rpc {
                         mode,
-                        sync,
+                        call_local,
                         transfer_mode,
                         transfer_channel,
                         rename,
